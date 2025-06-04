@@ -12,14 +12,22 @@ async function inTmpCopy(
   const myI = i;
   i += 1;
 
+  const originalCwd = Deno.cwd();
+
   const tmpPath = `test/tmp/tmp${i}_${original}`;
 
-  await Deno.remove(tmpPath, { recursive: true });
+  try {
+    await Deno.remove(tmpPath, { recursive: true });
+  } catch (_) {
+    // no-op
+  }
+
   await copy(original, tmpPath);
 
-  const fs = new SimpleFsDeno("./test/testDir");
+  const fs = new SimpleFsDeno(tmpPath);
   await thunk(fs);
 
+  Deno.chdir(originalCwd);
   await Deno.remove(tmpPath, { recursive: true });
 }
 

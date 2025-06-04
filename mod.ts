@@ -6,6 +6,7 @@ import {
   SimpleFilesystem,
   SimpleFilesystemExt,
 } from "@aljoscha-meyer/simple-fs-abstraction";
+import { join } from "@std/path/join";
 
 export class SimpleFsDeno implements SimpleFilesystem, SimpleFilesystemExt {
   private inner: FilesystemExt<SimpleFsDeno_>;
@@ -123,7 +124,9 @@ class SimpleFsDeno_ implements SimpleFilesystem {
   private workingDirectory: Path;
 
   constructor(mount: string) {
-    this.mount = mount;
+    Deno.chdir(mount);
+    this.mount = Deno.cwd();
+    // this.mount = join(Deno.cwd(), mount);
     this.workingDirectory = Path.absolute([]);
   }
 
@@ -135,7 +138,7 @@ class SimpleFsDeno_ implements SimpleFilesystem {
 
   private nativePath(path: Pathish): string {
     const absPath = this.computeAbsolutePath(path);
-    return absPath.toNativeString();
+    return join(this.mount, absPath.toNativeString().slice(1));
   }
 
   pwd(): Path {
@@ -144,9 +147,11 @@ class SimpleFsDeno_ implements SimpleFilesystem {
 
   cd(path: Pathish): void {
     const nativeTarget = this.nativePath(path);
+    console.log(this.mount, nativeTarget);
     Deno.chdir(nativeTarget);
 
     const target = this.computeAbsolutePath(path);
+
     this.workingDirectory = target;
   }
 
