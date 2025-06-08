@@ -1,4 +1,5 @@
 import {
+  ConcatPathError,
   FilesystemExt,
   Mode,
   Path,
@@ -7,6 +8,8 @@ import {
   SimpleFilesystemExt,
 } from "@aljoscha-meyer/simple-fs-abstraction";
 import { join } from "@std/path/join";
+import { isAbsolute } from "@std/path";
+import { copySync, moveSync } from "@std/fs";
 
 export class SimpleFsDeno implements SimpleFilesystem, SimpleFilesystemExt {
   private inner: FilesystemExt<SimpleFsDeno_>;
@@ -119,21 +122,85 @@ export class SimpleFsDeno implements SimpleFilesystem, SimpleFilesystemExt {
   }
 }
 
+const NO_SUCH_FILE = "Addressed a file but there is no file of that name.";
+const EXPECTED_DIRECTORY_GOT_DATA =
+  "Wanted to address a directory but there was a data file instead.";
+const EXPECTED_DATA_GOT_DIRECTORY =
+  "Wanted to address a data file but there was a directory instead.";
+const CANNOT_TURN_ROOT_INTO_DATA_FILE =
+  "Tried to turn the root of a filesystem into a data file, but that is not allowed";
+const CANNOT_COPY_OR_MOVE_INTO_ROOT =
+  "Tried to copy or move a file to the root of a filesystem, but that is not allowed";
+const CANNOT_DELETE_ROOT =
+  "Tried to delete the root of a filesystem, but that is not allowed";
+const TIMID =
+  "A filesystem oepration of mode `timid` (the default mode) would have overwritten data, so it threw this error instead.";
+
 class SimpleFsDeno_ implements SimpleFilesystem {
   private mount: string;
   private workingDirectory: Path;
 
   constructor(mount: string) {
-    Deno.chdir(mount);
-    this.mount = Deno.cwd();
-    // this.mount = join(Deno.cwd(), mount);
+    if (isAbsolute(mount)) {
+      this.mount = mount;
+    } else {
+      this.mount = join(Deno.cwd(), mount);
+    }
     this.workingDirectory = Path.absolute([]);
   }
 
   private computeAbsolutePath(path: Pathish): Path {
     const path_ = Path.fromPathish(path);
 
-    return path_.isAbsolute() ? path_ : this.workingDirectory.concat(path_);
+    if (path_.isAbsolute()) {
+      return path_;
+    } else {
+      if (path_.getParentSteps() > this.workingDirectory.getComponentCount()) {
+        throw new ConcatPathError(
+          `Resolving a path for this operation would have had to step above the root of the SimpleFsDeno.`,
+          this.workingDirectory,
+          path_,
+        );
+      } else {
+        return this.workingDirectory.concat(path_);
+      }
+    }
+  }
+
+  /**
+   * Returns `true` if there is a file at the given path, false if there isn't. If `createParentDir`, creates all necessary parent directories.
+   */
+  private resolveAbsolutePath(
+    path: Pathish,
+    createParentDirs = false,
+  ): "data" | "directory" | "nothing" {
+    const path_ = Path.fromPathish(path);
+    const components = path_.getComponents();
+
+    let currentPrefix = Path.absolute([]);
+
+    for (let i = 0; i < components.length; i++) {
+      currentPrefix = currentPrefix.pushBack(components[i]);
+      const stats = this.statSync(currentPrefix);
+
+      if (i + 1 < components.length) {
+        if (stats === "directory") {
+          continue;
+        } else if (stats === "data") {
+          throw new DenoFsError(EXPECTED_DIRECTORY_GOT_DATA);
+        } else if (createParentDirs) {
+          const nativeCurrentPrefix = this.nativePath(currentPrefix);
+          Deno.mkdirSync(nativeCurrentPrefix);
+        } else {
+          throw new DenoFsError(NO_SUCH_FILE);
+        }
+      } else {
+        return stats;
+      }
+    }
+
+    // Reached iff the path addresses the root of the simple FS:
+    return "directory";
   }
 
   private nativePath(path: Pathish): string {
@@ -146,61 +213,279 @@ class SimpleFsDeno_ implements SimpleFilesystem {
   }
 
   cd(path: Pathish): void {
-    const nativeTarget = this.nativePath(path);
-    console.log(this.mount, nativeTarget);
-    Deno.chdir(nativeTarget);
-
     const target = this.computeAbsolutePath(path);
 
-    this.workingDirectory = target;
+    const stats = this.statSync(path);
+    if (stats === "directory") {
+      this.workingDirectory = target;
+    } else if (stats === "data") {
+      throw new CdError(
+        `Cannot change the working directory to a data file.`,
+        target,
+      );
+    } else {
+      throw new CdError(
+        `Cannot change the working directory to a non-existing file.`,
+        target,
+      );
+    }
   }
 
-  ls(path?: Pathish): Promise<Set<string>> {
-    throw new Error("Method not implemented.");
+  async ls(path?: Pathish): Promise<Set<string>> {
+    const nativeTarget = this.nativePath(path ?? Path.relative([]));
+
+    const components: Set<string> = new Set();
+    for await (const dirEntry of Deno.readDir(nativeTarget)) {
+      components.add(dirEntry.name);
+    }
+
+    return components;
   }
+
   lsSync(path?: Pathish): Set<string> {
-    throw new Error("Method not implemented.");
+    const nativeTarget = this.nativePath(path ?? Path.relative([]));
+
+    const components: Set<string> = new Set();
+    for (const dirEntry of Deno.readDirSync(nativeTarget)) {
+      components.add(dirEntry.name);
+    }
+
+    return components;
   }
-  stat(path: Pathish): Promise<"directory" | "data" | "nothing"> {
-    throw new Error("Method not implemented.");
+
+  async stat(path: Pathish): Promise<"directory" | "data" | "nothing"> {
+    const nativeTarget = this.nativePath(path);
+
+    try {
+      const stats = await Deno.stat(nativeTarget);
+
+      if (stats.isDirectory) {
+        return "directory";
+      } else if (stats.isFile) {
+        return "data";
+      }
+    } catch (_) {
+      return "nothing";
+    }
+
+    throw new UnusualFileError(
+      `Encounter a file which was neither a data file nor a directory.`,
+      nativeTarget,
+    );
   }
+
   statSync(path: Pathish): "directory" | "data" | "nothing" {
-    throw new Error("Method not implemented.");
+    const nativeTarget = this.nativePath(path);
+
+    try {
+      const stats = Deno.statSync(nativeTarget);
+
+      if (stats.isDirectory) {
+        return "directory";
+      } else if (stats.isFile) {
+        return "data";
+      }
+    } catch (_) {
+      return "nothing";
+    }
+
+    throw new UnusualFileError(
+      `Encounter a file which was neither a data file nor a directory.`,
+      nativeTarget,
+    );
   }
-  read(path: Pathish): Promise<Uint8Array> {
-    throw new Error("Method not implemented.");
+
+  async read(path: Pathish): Promise<Uint8Array> {
+    const nativeTarget = this.nativePath(path);
+
+    return await Deno.readFile(nativeTarget);
   }
+
   readSync(path: Pathish): Uint8Array {
-    throw new Error("Method not implemented.");
+    const nativeTarget = this.nativePath(path);
+
+    return Deno.readFileSync(nativeTarget);
   }
-  write(path: Pathish, data: Uint8Array, mode?: Mode): Promise<void> {
-    throw new Error("Method not implemented.");
+
+  write(path: Pathish, data: Uint8Array, mode: Mode = "timid"): Promise<void> {
+    return Promise.resolve(this.writeSync(path, data, mode));
   }
-  writeSync(path: Pathish, data: Uint8Array, mode?: Mode): void {
-    throw new Error("Method not implemented.");
+
+  writeSync(path: Pathish, data: Uint8Array, mode: Mode = "timid"): void {
+    const nativeTarget = this.nativePath(path);
+
+    const target = this.computeAbsolutePath(path);
+    const targetStats = this.resolveAbsolutePath(target, true);
+
+    if (target.equals(Path.absolute([]))) {
+      throw new DenoFsError(CANNOT_TURN_ROOT_INTO_DATA_FILE);
+    } else if (targetStats !== "nothing") {
+      if (mode === "timid") {
+        throw new DenoFsError(TIMID);
+      } else if (mode === "placid") {
+        // Do nothing.
+      } else {
+        if (targetStats === "data") {
+          Deno.writeFileSync(nativeTarget, data);
+        } else {
+          Deno.removeSync(nativeTarget, { recursive: true });
+          Deno.writeFileSync(nativeTarget, data);
+        }
+      }
+    } else {
+      Deno.writeFileSync(nativeTarget, data);
+    }
   }
-  mkdir(path: Pathish, mode?: Mode): Promise<void> {
-    throw new Error("Method not implemented.");
+
+  mkdir(path: Pathish, mode: Mode = "timid"): Promise<void> {
+    return Promise.resolve(this.mkdirSync(path, mode));
   }
-  mkdirSync(path: Pathish, mode?: Mode): void {
-    throw new Error("Method not implemented.");
+
+  mkdirSync(path: Pathish, mode: Mode = "timid"): void {
+    const nativeTarget = this.nativePath(path);
+
+    const target = this.computeAbsolutePath(path);
+    const targetStats = this.resolveAbsolutePath(target, true);
+
+    if (target.equals(Path.absolute([]))) {
+      throw new DenoFsError(CANNOT_TURN_ROOT_INTO_DATA_FILE);
+    } else if (targetStats !== "nothing") {
+      if (mode === "timid") {
+        throw new DenoFsError(TIMID);
+      } else if (mode === "placid") {
+        // Do nothing.
+      } else {
+        Deno.removeSync(nativeTarget, { recursive: true });
+        Deno.mkdirSync(nativeTarget);
+      }
+    } else {
+      Deno.mkdirSync(nativeTarget);
+    }
   }
+
   remove(path: Pathish): Promise<void> {
-    throw new Error("Method not implemented.");
+    return Promise.resolve(this.removeSync(path));
   }
+
   removeSync(path: Pathish): void {
-    throw new Error("Method not implemented.");
+    const target = this.computeAbsolutePath(path);
+
+    if (target.getComponentCount() === 0) {
+      throw new DenoFsError(CANNOT_DELETE_ROOT);
+    } else {
+      const nativeTarget = this.nativePath(path);
+      Deno.removeSync(nativeTarget, { recursive: true });
+    }
   }
-  copy(src: Pathish, dst: Pathish, mode?: Mode): Promise<void> {
-    throw new Error("Method not implemented.");
+
+  copy(src: Pathish, dst: Pathish, mode: Mode = "timid"): Promise<void> {
+    return Promise.resolve(this.copySync(src, dst, mode));
   }
-  copySync(src: Pathish, dst: Pathish, mode?: Mode): void {
-    throw new Error("Method not implemented.");
+
+  copySync(src: Pathish, dst: Pathish, mode: Mode = "timid"): void {
+    const srcAbsolute = this.computeAbsolutePath(src);
+    const srcStats = this.resolveAbsolutePath(srcAbsolute, false);
+
+    if (srcStats === "nothing") {
+      throw new DenoFsError(NO_SUCH_FILE);
+    } else {
+      const dstAbsolute = this.computeAbsolutePath(dst);
+      const dstStats = this.resolveAbsolutePath(dstAbsolute, true);
+
+      if (dstAbsolute.getComponentCount() === 0) {
+        throw new DenoFsError(CANNOT_COPY_OR_MOVE_INTO_ROOT);
+      } else {
+        const nativeSrc = this.nativePath(src);
+        const nativeDst = this.nativePath(dst);
+
+        if (dstStats !== "nothing") {
+          if (mode === "timid") {
+            throw new DenoFsError(TIMID);
+          } else if (mode === "placid") {
+            // Do nothing.
+          } else {
+            Deno.removeSync(nativeDst, { recursive: true });
+            copySync(nativeSrc, nativeDst);
+          }
+        } else {
+          copySync(nativeSrc, nativeDst);
+        }
+      }
+    }
   }
-  move(src: Pathish, dst: Pathish, mode?: Mode): Promise<void> {
-    throw new Error("Method not implemented.");
+
+  move(src: Pathish, dst: Pathish, mode: Mode = "timid"): Promise<void> {
+    return Promise.resolve(this.moveSync(src, dst, mode));
   }
-  moveSync(src: Pathish, dst: Pathish, mode?: Mode): void {
-    throw new Error("Method not implemented.");
+
+  moveSync(src: Pathish, dst: Pathish, mode: Mode = "timid"): void {
+    const srcAbsolute = this.computeAbsolutePath(src);
+    const srcStats = this.resolveAbsolutePath(srcAbsolute, false);
+
+    if (srcStats === "nothing") {
+      throw new DenoFsError(NO_SUCH_FILE);
+    } else {
+      const dstAbsolute = this.computeAbsolutePath(dst);
+      const dstStats = this.resolveAbsolutePath(dstAbsolute, true);
+
+      if (dstAbsolute.getComponentCount() === 0) {
+        throw new DenoFsError(CANNOT_COPY_OR_MOVE_INTO_ROOT);
+      } else {
+        const nativeSrc = this.nativePath(src);
+        const nativeDst = this.nativePath(dst);
+
+        if (dstStats !== "nothing") {
+          if (mode === "timid") {
+            throw new DenoFsError(TIMID);
+          } else if (mode === "placid") {
+            // Do nothing.
+          } else {
+            Deno.removeSync(nativeDst, { recursive: true });
+            moveSync(nativeSrc, nativeDst);
+          }
+        } else {
+          moveSync(nativeSrc, nativeDst);
+        }
+      }
+    }
+  }
+}
+
+/**
+ * The type of errors thrown when the *simple* file system expects a directory or a path, but the real file system contains something else (a simlink, fifo, etc).
+ */
+export class UnusualFileError extends Error {
+  path: string;
+
+  constructor(message: string, path: string) {
+    super(message);
+    Object.setPrototypeOf(this, UnusualFileError.prototype);
+    this.name = "UnusualFileErrorError";
+    this.path = path;
+  }
+}
+
+/**
+ * The type of errors thrown when trying to change the working directory to an invalid path.
+ */
+export class CdError extends Error {
+  path: Path;
+
+  constructor(message: string, path: Path) {
+    super(message);
+    Object.setPrototypeOf(this, CdError.prototype);
+    this.name = "CdError";
+    this.path = path;
+  }
+}
+
+/**
+ * The type of generic errors thrown by `SimpleDenoFs` operations. The `name` property is always `DenoFsError`.
+ */
+export class DenoFsError extends Error {
+  constructor(message: string) {
+    super(message);
+    Object.setPrototypeOf(this, DenoFsError.prototype);
+    this.name = "DenoFsError";
   }
 }
