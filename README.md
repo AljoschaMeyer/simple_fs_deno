@@ -1,3 +1,5 @@
+Repository moved to https://codeberg.org/worm-blossom/simple-fs-deno
+
 # Simple FS Deno
 
 An implementation of the
