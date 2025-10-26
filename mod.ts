@@ -153,8 +153,8 @@ export class SimpleFsDeno implements SimpleFilesystem, SimpleFilesystemExt {
 const NO_SUCH_FILE = "Addressed a file but there is no file of that name.";
 const EXPECTED_DIRECTORY_GOT_DATA =
   "Wanted to address a directory but there was a data file instead.";
-const EXPECTED_DATA_GOT_DIRECTORY =
-  "Wanted to address a data file but there was a directory instead.";
+// const EXPECTED_DATA_GOT_DIRECTORY =
+//   "Wanted to address a data file but there was a directory instead.";
 const CANNOT_TURN_ROOT_INTO_DATA_FILE =
   "Tried to turn the root of a filesystem into a data file, but that is not allowed";
 const CANNOT_COPY_OR_MOVE_INTO_ROOT =
