@@ -1,24 +1,52 @@
+/**
+ * An implementation of the [`simple_fs_abstraction`](https://jsr.io/@wormblossom/simple-fs-abstraction), backed by the Deno file system APIs.
+ *
+ * The central entrypoint is the {@linkcode SimpleFsDeno} class, which implements both {@linkcode SimpleFilesystem} and {@linkcode SimpleFilesystemExt}.
+ *
+ * @module
+ */
+
 import {
   ConcatPathError,
   FilesystemExt,
-  Mode,
+  type Mode,
   Path,
-  Pathish,
-  SimpleFilesystem,
-  SimpleFilesystemExt,
-} from "@aljoscha-meyer/simple-fs-abstraction";
+  type Pathish,
+  type SimpleFilesystem,
+  type SimpleFilesystemExt,
+} from "@wormblossom/simple-fs-abstraction";
 import { join } from "@std/path/join";
 import { isAbsolute } from "@std/path";
 import { copySync, moveSync } from "@std/fs";
 
+/**
+ * A {@linkcode SimpleFilesystem} (and {@linkcode SimpleFilesystemExt}) backed by the real, persistent file system.
+ *
+ * The root of the created {@linkcode SimpleFsDeno} is the directory `mount` (specified as a platform-specific path in the constructor). Use the {@linkcode SimpleFsDeno.prototype.getMount | getMount} method to later retrieve the native path at which the {@linkcode SimpleFsDeno} was mounted.
+ *
+ * Aside from the mount point, this class provides only the functionality of the {@linkcode SimpleFilesystem} and {@linkcode SimpleFilesystemExt} interfaces.
+ */
 export class SimpleFsDeno implements SimpleFilesystem, SimpleFilesystemExt {
+  /** @ignore */
   private inner: FilesystemExt<SimpleFsDeno_>;
+  /** @ignore */
+  private mount: string;
 
   /**
-   * Creates a {@linkcode SimpleFilesystem} (and {@linkcode SimpleFilesystemExt}) backed by the real, persistent file system. The root of the created {@linkcode SimpleFsDeno} is the directory `mount`.
+   * Creates a {@linkcode SimpleFilesystem} (and {@linkcode SimpleFilesystemExt}) backed by the real, persistent file system.
+   *
+   * The root of the created {@linkcode SimpleFsDeno} is the directory `mount` (specified as a platform-specific path). Use the {@linkcode SimpleFsDeno.prototype.getMount | getMount} method to later retrieve the native path at which the {@linkcode SimpleFsDeno} was mounted.
    */
   constructor(mount: string) {
     this.inner = new FilesystemExt(new SimpleFsDeno_(mount));
+    this.mount = mount;
+  }
+
+  /**
+   * Returns the native file system path at which this {@linkcode SimpleFsDeno} is mounted.
+   */
+  getMount(): string {
+    return this.mount;
   }
 
   pwd(): Path {
@@ -452,7 +480,7 @@ class SimpleFsDeno_ implements SimpleFilesystem {
 }
 
 /**
- * The type of errors thrown when the *simple* file system expects a directory or a path, but the real file system contains something else (a simlink, fifo, etc).
+ * The type of errors thrown when a {@linkcode SimpleFsDeno} expects a directory or a path, but the real file system contains something else (a simlink, fifo, etc).
  */
 export class UnusualFileError extends Error {
   path: string;
@@ -466,7 +494,7 @@ export class UnusualFileError extends Error {
 }
 
 /**
- * The type of errors thrown when trying to change the working directory to an invalid path.
+ * The type of errors thrown by {@linkcode SimpleFsDeno} operations when trying to change the working directory to an invalid path.
  */
 export class CdError extends Error {
   path: Path;
@@ -480,7 +508,7 @@ export class CdError extends Error {
 }
 
 /**
- * The type of generic errors thrown by `SimpleDenoFs` operations. The `name` property is always `DenoFsError`.
+ * The type of errors thrown by {@linkcode SimpleFsDeno} operations when the problem is neither a {@linkcode CdError} nor by an {@linkcode UnusualFileError}. The `name` property is always `"DenoFsError"`.
  */
 export class DenoFsError extends Error {
   constructor(message: string) {

@@ -4,7 +4,8 @@
     "jsr:@std/assert@0.221": "0.221.0",
     "jsr:@std/fmt@0.221": "0.221.0",
     "jsr:@std/fs@^1.0.18": "1.0.18",
-    "jsr:@std/path@^1.1.0": "1.1.0"
+    "jsr:@std/path@^1.1.0": "1.1.0",
+    "jsr:@wormblossom/simple-fs-abstraction@0.1": "0.1.0"
   },
   "jsr": {
     "@std/assert@0.221.0": {
@@ -24,13 +25,20 @@
     },
     "@std/path@1.1.0": {
       "integrity": "ddc94f8e3c275627281cbc23341df6b8bcc874d70374f75fec2533521e3d6886"
+    },
+    "@wormblossom/simple-fs-abstraction@0.1.0": {
+      "integrity": "a7e99d1d1cbed0dcaba0a5e96d40941d0945fc846a035aa0bf44a7284ee74bab",
+      "dependencies": [
+        "jsr:@std/path"
+      ]
     }
   },
   "workspace": {
     "dependencies": [
       "jsr:@std/assert@0.221",
       "jsr:@std/fs@^1.0.18",
-      "jsr:@std/path@^1.1.0"
+      "jsr:@std/path@^1.1.0",
+      "jsr:@wormblossom/simple-fs-abstraction@0.1"
     ]
   }
 }
